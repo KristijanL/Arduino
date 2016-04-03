@@ -1,0 +1,234 @@
+#!/bin/bash
+#########################################################
+#							#
+#		SNMP check arduino			#
+#							#
+# ----------------------------------------------------- #
+#							#
+# Overview						#
+#							#
+#	This plugin will check a custom arduino board	#
+# with DHT sensor returning humidity temperature uptime	#
+#							#
+# This plugin is distributed under the GNU GPL license.	#
+# You may re-destribute only according to the terms of 	#
+# the GNU GPL v2.					#
+#							#
+# Version 1.0						#
+#########################################################
+
+#########################################################
+##		     GLOBAL VARIABLES 		       ##
+#########################################################
+APPNAME=$(basename $0)
+VERSION="1.0"
+EXIT_CODE=0
+EXIT_STRING=""
+PERFDAT=""
+
+WARNING=60
+CRITICAL=70
+
+
+#########################################################
+##		    print_help Function		       ##
+#########################################################
+# Prints out user help and gives examples of proper	#
+# plugin usage						#
+#########################################################
+
+function print_help () {
+
+	echo 'Arduino SNMP Checks for Nagios/Icinga/etc.'
+	echo ''
+	echo 'Please do not e-mail them for support on this plugin.'
+	echo ''
+	echo 'For contact info, please read the plugin script file.'
+	echo ''
+	echo "Usage of $APPNAME"
+	echo " $APPNAME -H <host/IP> -C <community> -t <check> [-p] [-w] [-c] [-S] | -h | -V "
+	echo "---------------------------------------------------------------------"
+	echo "Usable Options:"
+	echo '	 -C <community>'
+	echo '	     The SNMP Community variable - use the name of your SNMP community with read privileges'
+	echo '	     By default, the community is assumed to be public'
+	echo '	 -H <hostname>'
+	echo '	 (required option)'
+	echo '	     The IP address or hostname of the system to check'
+	echo '	 -w <warn>'
+	echo '       warning threshold (degrees)'
+	echo '	 -c <crit>'
+	echo '	     critical threshold (degrees)'
+	echo '	 -t { uptime | temp | humidity }'
+	echo '   (required option)'
+	echo '		type of check to perform'
+	echo '	 -p <port number>'
+	echo "	 	specify a port number to be checked (only for the '-t port' option"
+	echo '	 -h'
+	echo '	     show this help screen'
+	echo '	 -V'
+	echo '	     show the current version of the plugin'
+	echo ""
+	echo "Examples:"
+	echo "    $APPNAME -H hostname -C public -t temp"
+	echo '			to check temperature reading of the sensor'
+	echo "    $APPNAME -H hostname -C public -t humidity -w 60 -c 70"
+	echo '			to check humidity reading of the sensor'
+	echo ""
+	echo "---------------------------------------------------------------------"
+
+	return 3
+}
+
+#########################################################
+##		   CheckTemps function		       ##
+#########################################################
+# Checks temperature value.				#
+#########################################################
+function CheckTemp () {
+	TEMP_EXIT_STATUS=0
+	TEMP_VALUE=$(snmpget -v 1 -Ovq -c $COMMUNITY $HOST_NAME 1.3.6.1.4.1.36582.0.1 2>/dev/null)
+	TEMP=$(( $TEMP_VALUE / 100)) 
+	TEMP_float=$( echo "scale=2; $TEMP_VALUE /100" | bc -l )
+
+	if [ $TEMP -ge $CRITICAL ]; then
+		EXIT_STRING="$EXIT_STRING CRITICAL: Sensor temperature of $TEMP_float degrees celsius exceeds threshold of $CRITICAL! | temperature=$TEMP_float C;$WARNING;$CRITICAL"
+		TEMP_EXIT_STATUS=2
+	else if [ $TEMP -lt "$CRITICAL" ] && [ $TEMP -ge "$WARNING" ]; then
+		EXIT_STRING="$EXIT_STRING WARNING: Sensor temperature of $TEMP_float degrees celsius exceeds threshold of $WARNING! | temperature=$TEMP_float C;$WARNING;$CRITICAL"
+		TEMP_EXIT_STATUS=1
+		else
+			EXIT_STRING="$EXIT_STRING OK: Sensor temperature is $TEMP_float degrees celsius. | temperature=$TEMP_float C;$WARNING;$CRITICAL"
+			TEMP_EXIT_STATUS=0
+		fi
+	fi
+	
+	return $TEMP_EXIT_STATUS
+}
+
+#########################################################
+##		    CheckHumidity function	       ##
+#########################################################
+# Checks humidity value.	 			#
+#########################################################
+
+function CheckHumidity () {
+        HUMIDITY_EXIT_STATUS=0
+        HUMIDITY_VALUE=$(snmpget -v 1 -Ovq -c $COMMUNITY $HOST_NAME 1.3.6.1.4.1.36582.0.2 2>/dev/null)
+        HUMIDITY=$(( $HUMIDITY_VALUE / 100))
+        HUMIDITY_float=$( echo "scale=2; $HUMIDITY_VALUE /100" | bc -l )
+
+        if [ $HUMIDITY -ge $CRITICAL ]; then
+                EXIT_STRING="$EXIT_STRING CRITICAL: Sensor humidity of $HUMIDITY_float%% exceeds threshold of $CRITICAL! | humidity=$HUMIDITY_float%%;$WARNING;$CRITICAL"
+                HUMIDITY_EXIT_STATUS=2
+        else if [ $HUMIDITY -lt "$CRITICAL" ] && [ $HUMIDITY -ge "$WARNING" ]; then
+                EXIT_STRING="$EXIT_STRING WARNING: Sensor humidity of $HUMIDITY_float%% exceeds threshold of $WARNING! | humidity=$HUMIDITY_float%%;$WARNING;$CRITICAL"
+                HUMIDITY_EXIT_STATUS=1
+                else
+                        EXIT_STRING="$EXIT_STRING OK: Sensor humidity is $HUMIDITY_float%%. | humidity=$HUMIDITY_float%%;$WARNING;$CRITICAL"
+                        HUMIDITY_EXIT_STATUS=0
+                fi
+        fi
+
+        return $HUMIDITY_EXIT_STATUS
+}
+
+#########################################################
+##                  CheckUptime function               ##
+#########################################################
+# Checks uptime value.		                        #
+#########################################################
+
+function CheckUptime () {
+	UPTIME_EXIT_STATUS=0
+	UPTIME=$(snmpget -v 1 -Ovq -c $COMMUNITY $HOST_NAME 1.3.6.1.2.1.1.3.0 2>/dev/null)
+
+	EXIT_STRING="$EXIT_STRING OK: Uptime is: $UPTIME."
+	return $UPTIME_EXIT_STATUS
+}
+
+
+#########################################################
+##			MAIN CODE		       ##
+#########################################################
+
+# Check that all required binaries for the script are available
+# 	EXIT with an UNKNOWN status if not
+binaries="snmpget cut tr"
+
+for required_binary in $binaries; do
+	which $required_binary > /dev/null
+	if [ "$?" != '0' ];then
+		printf "UNKNOWN: $APPNAME: No usable '$required_binary' binary in '$PATH'\n"
+		exit 3
+	fi
+done
+
+
+# Parse our options as passed, and make sure things are peachy
+while getopts "C:H:w:c:t:p:hV" OPTION;
+do
+	case $OPTION in
+		"C") 
+		COMMUNITY=$OPTARG 
+		;;
+		"H") 
+		HOST_NAME=$OPTARG
+		;;
+		"w") # Assign WARNING threshold
+		WARNING=$OPTARG
+		;;
+		"c") # Assign CRITICAL threshold
+		CRITICAL=$OPTARG
+		;;
+		"t")
+		CHECK_TYPE=$OPTARG
+		;;
+		"p")
+		# need to try and be sure -t has been used
+		PARAMETER=$OPTARG
+		;;
+		"h") 
+		print_help
+		exit $?
+		;;
+		"V") 
+		printf "$APPNAME - version $VERSION\n"
+		exit $EXIT_CODE
+		;;
+	esac
+done
+
+# Make sure all necessary arguments were given; EXIT with an UNKNOWN status if not
+if [ -z "$COMMUNITY" ] || [ -z "$HOST_NAME" ];then
+	EXIT_STRING="UNKNOWN: Hostname and/or Community variables have not been set!\nTry first with -help\n"
+	EXIT_STATUS=3
+else
+		case "$CHECK_TYPE" in
+			"uptime")
+				CheckUptime
+				EXIT_CODE=$?
+			;;
+			"temperature")
+				CheckTemp
+				EXIT_CODE=$?
+			;;
+			"humidity")
+				CheckHumidity
+				EXIT_CODE=$?
+			;;
+			*)
+				EXIT_STRING="UNKNOWN: No check type specified to -t parameter"
+				EXIT_CODE=3
+			;;	
+		esac
+	fi
+
+# If the program hasn't exited already, then a check was run okay and we can quit.
+if [ "$PERFDAT" == "" ]; then
+	printf "$EXIT_STRING\n"
+else
+	printf "$EXIT_STRING|$PERFDAT\n"
+fi
+
+exit $EXIT_CODE
